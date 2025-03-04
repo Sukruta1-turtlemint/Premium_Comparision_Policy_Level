@@ -4,11 +4,9 @@ import pandas as pd
 class FileHandler:
     """Handles file reading for CSV and Excel files."""
     def read_csv(self, file_path):
-        """Reads a CSV file."""
         return pd.read_csv(file_path)
     
     def read_excel(self, file_path, sheet_name=None, header='infer', nrows=None):
-        """Reads an Excel file. Uses pyxlsb engine for .xlsb files."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.xlsb':
             return pd.read_excel(file_path, sheet_name=sheet_name, header=header, nrows=nrows, engine='pyxlsb')
@@ -16,7 +14,6 @@ class FileHandler:
             return pd.read_excel(file_path, sheet_name=sheet_name, header=header, nrows=nrows)
     
     def get_excel_sheet_names(self, file_path):
-        """Lists sheet names in an Excel file."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.xlsb':
             return pd.ExcelFile(file_path, engine='pyxlsb').sheet_names
@@ -26,7 +23,7 @@ class FileHandler:
 class DataExtractor:
     """Extracts data from insurer spreadsheets."""
     def extract_sheet_data(self, file_handler, file_path, sheet_name, year, insurer):
-        # Read first 5 rows without header to find header row
+        # Read the first 5 rows without header to find the header row
         sample_df = file_handler.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=5)
         header_row_index = None
         # Look for a row containing both 'Total premium' and 'Policy number' (case-insensitive)
@@ -35,24 +32,23 @@ class DataExtractor:
             if 'total premium' in row_str and 'policy number' in row_str:
                 header_row_index = i
                 break
-        # If not found, you may decide to skip the sheet or default to row 0.
+        # If not found, default to row 0.
         if header_row_index is None:
             header_row_index = 0
 
-        # Now load the entire sheet using the discovered header row.
+        # Load the entire sheet using the discovered header row.
         df = file_handler.read_excel(file_path, sheet_name=sheet_name, header=header_row_index)
-        # Standardize column names
         df.columns = df.columns.str.strip().str.lower()
         
-        # Verify that required columns are present.
+        # Verify required columns.
         if 'policy number' not in df.columns or 'total premium' not in df.columns:
             return None
         
-        # Extract and create a dataframe with required columns and metadata.
+        # Build the extracted dataframe.
         extracted = pd.DataFrame({
             'Year': year,
             'Insurer': insurer,
-            'Type': sheet_name.lower(),  # Using sheet name as type (converted to lowercase)
+            'Type': sheet_name.lower(),  # Use sheet name as type (in lowercase)
             'Policy number': df['policy number'],
             'Premium': df['total premium']
         })
@@ -74,16 +70,38 @@ class DataExtractor:
         if extracted_frames:
             return pd.concat(extracted_frames, ignore_index=True)
         else:
-            return pd.DataFrame()  # Return empty DataFrame if no sheet data is found
+            return pd.DataFrame()  # Return empty DataFrame if no valid sheet data is found
 
 class DataComparer:
     """Compares the S3 premium data with the extracted Given premium data."""
+    def aggregate_given_data(self, given_df):
+        """
+        Aggregates premium data from sub-type sheets.
+        If the 'Type' column starts with 'base' (or 'reward') then those rows are aggregated
+        into a single 'base' (or 'reward') row per Year, Insurer, and Policy number.
+        """
+        # Standardize column names to lowercase.
+        given_df.columns = given_df.columns.str.strip().str.lower()
+        # Create an aggregation key: if type starts with 'base' then set as 'base'; if 'reward', then 'reward'
+        given_df['agg_type'] = given_df['type'].apply(lambda x: 'base' if x.startswith('base') else ('reward' if x.startswith('reward') else x))
+        # Group by year, insurer, aggregated type, and policy number, summing the Premium.
+        agg_df = given_df.groupby(['year', 'insurer', 'agg_type', 'policy number'], as_index=False).agg({'premium': 'sum'})
+        # Record the datatype of the aggregated premium.
+        agg_df['datatype'] = agg_df['premium'].apply(lambda x: type(x).__name__)
+        # Rename the aggregated type column back to 'type'.
+        agg_df.rename(columns={'agg_type': 'type'}, inplace=True)
+        return agg_df
+    
     def compare_data(self, s3_df, given_df):
-        # Standardize column names for merging (ensure keys match)
+        # Standardize S3 dataframe column names.
         s3_df.columns = s3_df.columns.str.strip().str.lower()
-        # For this example, assume s3_df has 'total premium' as premium column.
-        # Merge on Year, Insurer, Type, and Policy number using an outer join.
-        merged = pd.merge(s3_df, given_df, on=['year', 'insurer', 'type', 'policy number'], how='outer', suffixes=('_s3', '_given'))
+        
+        # Aggregate Given premium data to consolidate sub-type sheets.
+        aggregated_given_df = self.aggregate_given_data(given_df)
+        
+        # Merge S3 and aggregated Given data on year, insurer, type, and policy number.
+        merged = pd.merge(s3_df, aggregated_given_df, on=['year', 'insurer', 'type', 'policy number'],
+                          how='outer', suffixes=('_s3', '_given'))
         
         def determine_status(row):
             s3_premium = row.get('total premium')
@@ -103,25 +121,26 @@ class DataComparer:
         
         def record_multivalues(row):
             if row['Status'] == "Not matches":
-                return f"S3: {row.get('total premium')} | Given: {row.get('premium')}"
+                return f"[{row.get('total premium')}, {row.get('premium')}]"
             else:
                 return ""
         
         merged['Multivalues'] = merged.apply(record_multivalues, axis=1)
-        # Rename columns for output clarity.
+        # Rename columns for clarity.
         merged.rename(columns={
             'total premium': 'S3_premium',
             'premium': 'Given_premium'
         }, inplace=True)
         # Rearranging the columns as specified.
-        cols = ['year', 'insurer', 'type', 'policy number', 'S3_premium', 'Given_premium', 'Datatype', 'Status', 'Multivalues']
+        cols = ['year', 'insurer', 'type', 'policy number', 'S3_premium', 'Given_premium', 'datatype', 'Status', 'Multivalues']
         comparison_df = merged[cols]
-        # Optionally, rename columns to have initial capitals.
+        # Capitalize column names for the final output.
         comparison_df.rename(columns={
             'year': 'Year',
             'insurer': 'Insurer',
             'type': 'Type',
-            'policy number': 'Policy number'
+            'policy number': 'Policy number',
+            'datatype': 'Datatype'
         }, inplace=True)
         return comparison_df
 
@@ -133,7 +152,6 @@ class ReportGenerator:
     def save_comparison_report(self, comparison_df, output_path):
         comparison_df.to_excel(output_path, index=False)
 
-# Main process that orchestrates the file iteration, data extraction, comparison, and report generation.
 def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
     file_handler = FileHandler()
     data_extractor = DataExtractor()
@@ -142,14 +160,14 @@ def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
     
     # Read S3 premium data from CSV.
     s3_df = file_handler.read_csv(s3_csv_path)
-    s3_df.columns = s3_df.columns.str.strip().str.lower()  # Standardize column names
-
+    s3_df.columns = s3_df.columns.str.strip().str.lower()
+    
     all_given_data = []
     # Iterate through each year folder.
     for year_folder in os.listdir(root_folder):
         year_folder_path = os.path.join(root_folder, year_folder)
         if os.path.isdir(year_folder_path):
-            # For each file in the year folder that is an Excel workbook.
+            # Process each Excel file in the year folder.
             for file in os.listdir(year_folder_path):
                 if file.lower().endswith(('.xlsx', '.xlsb', '.xls')):
                     file_path = os.path.join(year_folder_path, file)
@@ -157,25 +175,24 @@ def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
                     if not extracted_data.empty:
                         all_given_data.append(extracted_data)
     
-    # Combine all extracted data.
     if all_given_data:
         given_df = pd.concat(all_given_data, ignore_index=True)
     else:
         given_df = pd.DataFrame()
     
-    # Save the Given premium data report.
+    # Save the raw Given premium data report (if needed).
     report_generator.save_given_premium(given_df, given_output_path)
     
-    # Compare the S3 and Given premium data.
+    # Compare the S3 and Given premium data (after aggregation) and generate the comparison report.
     comparison_df = data_comparer.compare_data(s3_df, given_df)
     report_generator.save_comparison_report(comparison_df, comparison_output_path)
     print("Reports generated successfully.")
 
 if __name__ == "__main__":
-    # Define paths (update these paths as needed)
-    root_folder = "path_to_year_folders"            # Root directory containing year-wise folders
-    s3_csv_path = "S3_premium.csv"                    # CSV file path
-    given_output_path = "Given_policynumber_premium.xlsx"
-    comparison_output_path = "Comparison_Report.xlsx"
+    # Update these paths as needed for your environment.
+    root_folder = "/Users/sukrutasakoji/Downloads/Given"          # Root directory containing year-wise folders
+    s3_csv_path = "/Users/sukrutasakoji/Downloads/S3_premium_2020-21.xlsx"         # S3 premium CSV file path
+    given_output_path = "/Users/sukrutasakoji/Downloads"
+    comparison_output_path = "/Users/sukrutasakoji/Comparison_Report.xlsx"
     
     main(root_folder, s3_csv_path, given_output_path, comparison_output_path)
