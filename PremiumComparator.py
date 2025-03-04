@@ -6,7 +6,7 @@ class FileHandler:
     def read_csv(self, file_path):
         return pd.read_csv(file_path)
     
-    def read_excel(self, file_path, sheet_name=None, header='infer', nrows=None):
+    def read_excel(self, file_path, sheet_name=None, header=0, nrows=None):
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.xlsb':
             return pd.read_excel(file_path, sheet_name=sheet_name, header=header, nrows=nrows, engine='pyxlsb')
@@ -98,7 +98,17 @@ class DataComparer:
         
         # Aggregate Given premium data to consolidate sub-type sheets.
         aggregated_given_df = self.aggregate_given_data(given_df)
-        
+
+        print(s3_df.columns)
+        print(aggregated_given_df.columns)
+
+        # Standardize key columns in both DataFrames:
+        for col in ['insurer', 'type', 'policy number']:
+            s3_df[col] = s3_df[col].astype(str).str.strip().str.lower()
+
+        s3_df['year'] = s3_df['year'].astype(int)  # Convert to int
+        aggregated_given_df['year'] = aggregated_given_df['year'].astype(int)  # Convert to int
+
         # Merge S3 and aggregated Given data on year, insurer, type, and policy number.
         merged = pd.merge(s3_df, aggregated_given_df, on=['year', 'insurer', 'type', 'policy number'],
                           how='outer', suffixes=('_s3', '_given'))
@@ -118,6 +128,8 @@ class DataComparer:
                 return "Not matches"
         
         merged['Status'] = merged.apply(determine_status, axis=1)
+
+        print("merged df:", merged)
         
         def record_multivalues(row):
             if row['Status'] == "Not matches":
@@ -126,11 +138,15 @@ class DataComparer:
                 return ""
         
         merged['Multivalues'] = merged.apply(record_multivalues, axis=1)
+
+        print("merged df:", merged)
         # Rename columns for clarity.
         merged.rename(columns={
-            'total premium': 'S3_premium',
-            'premium': 'Given_premium'
+            'premium_s3': 'S3_premium',
+            'premium_given': 'Given_premium'
         }, inplace=True)
+
+        print("merged df:", merged)
         # Rearranging the columns as specified.
         cols = ['year', 'insurer', 'type', 'policy number', 'S3_premium', 'Given_premium', 'datatype', 'Status', 'Multivalues']
         comparison_df = merged[cols]
@@ -151,18 +167,19 @@ class ReportGenerator:
     
     def save_comparison_report(self, comparison_df, output_path):
         comparison_df.to_excel(output_path, index=False)
+        print(f"Comparison report saved to {output_path}")
 
-def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
+def main(root_folder, s3_excel_path, given_output_path, comparison_output_path):
     file_handler = FileHandler()
     data_extractor = DataExtractor()
     data_comparer = DataComparer()
     report_generator = ReportGenerator()
     
     # Read S3 premium data from CSV.
-    s3_df = file_handler.read_csv(s3_csv_path)
+    s3_df = file_handler.read_excel(s3_excel_path, sheet_name='Sheet1')
     s3_df.columns = s3_df.columns.str.strip().str.lower()
     
-    all_given_data = []
+    all_given_data = []   # List because we may have multiple Given premium dataframes to concatenate.
     # Iterate through each year folder.
     for year_folder in os.listdir(root_folder):
         year_folder_path = os.path.join(root_folder, year_folder)
@@ -191,8 +208,8 @@ def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
 if __name__ == "__main__":
     # Update these paths as needed for your environment.
     root_folder = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Trial"          # Root directory containing year-wise folders
-    s3_csv_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/S3_premium_Testing_Aegon_2024.xlsx"         # S3 premium CSV file path
+    s3_excel_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/S3_premium_Testing_Aegon_2024.xlsx"         # S3 premium CSV file path
     given_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Given_Report.xlsx"
     comparison_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Comparison_Report.xlsx"
     
-    main(root_folder, s3_csv_path, given_output_path, comparison_output_path)
+    main(root_folder, s3_excel_path, given_output_path, comparison_output_path)
