@@ -190,9 +190,9 @@ def main(root_folder, s3_csv_path, given_output_path, comparison_output_path):
 
 if __name__ == "__main__":
     # Update these paths as needed for your environment.
-    root_folder = "/Users/sukrutasakoji/Downloads/Given"          # Root directory containing year-wise folders
-    s3_csv_path = "/Users/sukrutasakoji/Downloads/S3_premium_2020-21.xlsx"         # S3 premium CSV file path
-    given_output_path = "/Users/sukrutasakoji/Downloads"
-    comparison_output_path = "/Users/sukrutasakoji/Comparison_Report.xlsx"
+    root_folder = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Trial"          # Root directory containing year-wise folders
+    s3_csv_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/S3_premium_Testing_Aegon_2024.xlsx"         # S3 premium CSV file path
+    given_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Given_Report.xlsx"
+    comparison_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Comparison_Report.xlsx"
     
     main(root_folder, s3_csv_path, given_output_path, comparison_output_path)
