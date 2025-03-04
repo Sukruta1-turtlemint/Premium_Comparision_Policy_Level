@@ -95,6 +95,9 @@ class DataComparer:
     def compare_data(self, s3_df, given_df):
         # Standardize S3 dataframe column names.
         s3_df.columns = s3_df.columns.str.strip().str.lower()
+
+        # Rename the premium column in s3_df from 'total premium' to 'premium'
+        s3_df.rename(columns={'total premium': 'premium'}, inplace=True)
         
         # Aggregate Given premium data to consolidate sub-type sheets.
         aggregated_given_df = self.aggregate_given_data(given_df)
@@ -207,8 +210,8 @@ def main(root_folder, s3_excel_path, given_output_path, comparison_output_path):
 
 if __name__ == "__main__":
     # Update these paths as needed for your environment.
-    root_folder = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Trial"          # Root directory containing year-wise folders
-    s3_excel_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/S3_premium_Testing_Aegon_2024.xlsx"         # S3 premium CSV file path
+    root_folder = "/Users/sukrutasakoji/Desktop/Trial"          # Root directory containing year-wise folders
+    s3_excel_path = "/Users/sukrutasakoji/Desktop/S3_premium_Testing_Aegon_2024.xlsx"         # S3 premium CSV file path
     given_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Given_Report.xlsx"
     comparison_output_path = "/Users/sukrutasakoji/Desktop/Premium_Comparision_Policy_Level/Comparison_Report.xlsx"
     
